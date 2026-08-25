@@ -2052,9 +2052,11 @@ end
 
 
 """
-    write_ONOFFhistograms(r, transitions, G, R, S, insertstep, bins; outfile::String="")
+    write_ONOFFhistograms(r, transitions, G, R, S, insertstep, bins; outfile="", simulate=false)
 
-simulations and master equation solutions of dwell time histograms
+Write theoretical ON/OFF dwell-time PDFs and CDFs at the supplied time bins.
+Times are in minutes. The output columns are `time`, `ON`, `OFF`, `ON_CDF`, and
+`OFF_CDF`; `ON` and `OFF` retain the historical normalized PDF output.
 """
 function write_ONOFFhistograms(r, transitions, G, R, S, insertstep, bins; outfile::String="", simulate=false)
     onstates = on_states(G, R, S, insertstep)
@@ -2062,12 +2064,25 @@ function write_ONOFFhistograms(r, transitions, G, R, S, insertstep, bins; outfil
     T = make_mat_T(components, r)
     TA = make_mat_TA(components, r)
     TI = make_mat_TI(components, r)
-    OFF, ON = offonPDF(bins, r, T, TA, TI, components.nT, components.elementsT, onstates)
+    OFF_CDF_edges, ON_CDF_edges = offonCDF(
+        bins, r, T, TA, TI, components.nT, components.elementsT, onstates,
+    )
+    OFF = pdf_from_cdf(OFF_CDF_edges)
+    ON = pdf_from_cdf(ON_CDF_edges)
+    # dwelltimeCDF prepends the left edge needed to derive the first PDF bin.
+    OFF_CDF = OFF_CDF_edges[2:end]
+    ON_CDF = ON_CDF_edges[2:end]
     if simulate
         hs = simulator(r, transitions, G, R, S, insertstep, bins=bins)
-        df = DataFrame(time=bins, ON=ON, OFF=OFF, SimON=hs[2] / sum(hs[2]), SimOFF=hs[3] / sum(hs[3]))
+        sim_on = hs[2] / sum(hs[2])
+        sim_off = hs[3] / sum(hs[3])
+        df = DataFrame(
+            time=bins, ON=ON, OFF=OFF, ON_CDF=ON_CDF, OFF_CDF=OFF_CDF,
+            SimON=sim_on, SimOFF=sim_off,
+            SimON_CDF=cumsum(sim_on), SimOFF_CDF=cumsum(sim_off),
+        )
     else
-        df = DataFrame(time=bins, ON=ON, OFF=OFF)
+        df = DataFrame(time=bins, ON=ON, OFF=OFF, ON_CDF=ON_CDF, OFF_CDF=OFF_CDF)
     end
     if ~isempty(outfile)
         CSV.write(outfile, df)
@@ -2075,7 +2090,25 @@ function write_ONOFFhistograms(r, transitions, G, R, S, insertstep, bins; outfil
     return df
 end
 
-function write_ONOFFhistograms(folder::String, bins=collect(1.0:200.0))
+function _onoff_output_bins(bins, bin_size::Real, maxtime::Real)
+    if bins !== nothing
+        isempty(bins) && throw(ArgumentError("bins cannot be empty"))
+        return Float64.(collect(bins))
+    end
+    bin_size > 0 || throw(ArgumentError("bin_size must be positive; got $bin_size"))
+    maxtime >= bin_size || throw(ArgumentError(
+        "maxtime must be at least bin_size; got maxtime=$maxtime and bin_size=$bin_size",
+    ))
+    collect(Float64(bin_size):Float64(bin_size):Float64(maxtime))
+end
+
+function write_ONOFFhistograms(
+    folder::String,
+    bins=nothing;
+    bin_size::Real=1.0,
+    maxtime::Real=200.0,
+)
+    output_bins = _onoff_output_bins(bins, bin_size, maxtime)
     files = get_resultfiles(folder)
     for (root, dirs, files) in walkdir(folder)
         for f in files
@@ -2086,29 +2119,38 @@ function write_ONOFFhistograms(folder::String, bins=collect(1.0:200.0))
                 r = readrates(joinpath(root, f))
                 out = joinpath(root, replace(f, "rates" => "ONOFF", ".txt" => ".csv"))
                 transitions = get_transitions(G, parts.label)
-                write_ONOFFhistograms(r, transitions, G, R, S, insertstep, bins, outfile=out)
+                write_ONOFFhistograms(r, transitions, G, R, S, insertstep, output_bins, outfile=out)
             end
         end
     end
 end
 
 """
-    write_ONOFFhistograms_key(folder; bins=collect(1.0:200.0), ratetype="median", root=".", simulate=false)
+    write_ONOFFhistograms_key(folder; bins=nothing, bin_size=1.0, maxtime=200.0,
+                              ratetype="median", root=".", simulate=false)
 
 Key-based front-end for individual ON/OFF dwell-time histograms. Walks the resolved results
 folder for `info_*.jld2`, reads the matching `rates_<key>.txt`, and uses the stored run spec
 metadata instead of parsing legacy rate filenames.
+
+Time is measured in minutes. Pass an explicit `bins` vector, or construct
+uniform bins with `bin_size` and `maxtime`. For data acquired every 100 seconds,
+use `bin_size=100/60`. Output includes both normalized PDFs (`ON`, `OFF`) and
+CDFs (`ON_CDF`, `OFF_CDF`).
 
 Coupled/joint fits are skipped because this histogram is defined for a single individual model;
 use `write_joint_residence_prob_onoff_key` for joint ON/OFF residence probabilities.
 """
 function write_ONOFFhistograms_key(
     folder::String;
-    bins=collect(1.0:200.0),
+    bins=nothing,
+    bin_size::Real=1.0,
+    maxtime::Real=200.0,
     ratetype::String="median",
     root::String=".",
     simulate::Bool=false,
 )
+    output_bins = _onoff_output_bins(bins, bin_size, maxtime)
     results_dir = folder_path(folder, root, "results")
     df = DataFrame(
         key=String[],
@@ -2162,7 +2204,7 @@ function write_ONOFFhistograms_key(
                         info[:R],
                         info[:S],
                         info[:insertstep],
-                        bins;
+                        output_bins;
                         outfile=outfile,
                         simulate=simulate,
                     )

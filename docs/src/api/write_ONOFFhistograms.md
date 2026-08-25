@@ -1,84 +1,88 @@
-# write_ONOFFhistograms Function
+# ON/OFF dwell-time outputs
 
-Generate ON/OFF dwell time histograms for GRSM models.
+`write_ONOFFhistograms` and `write_ONOFFhistograms_key` calculate theoretical
+ON/OFF dwell-time distributions from fitted model rates. The key-based method
+is recommended for current result folders because it reads model metadata from
+`info_<key>.jld2` rather than inferring the model from a filename.
 
-## Syntax
-
-```julia
-write_ONOFFhistograms(; kwargs...)
-```
-
-## Arguments
-
-### Model Parameters
-
-- `G::Int = 2`: Number of gene states
-- `R::Int = 0`: Number of pre-RNA steps
-- `S::Int = 0`: Number of splice sites
-- `insertstep::Int = 1`: Reporter insertion step
-- `transitions::Tuple = ()`: State transitions
-- `rates::Vector{Float64}`: Model rates
-- `nalleles::Int = 1`: Number of alleles
-
-### Histogram Parameters
-
-- `ntraces::Int = 1000`: Number of traces for histogram
-- `tspan::Tuple{Float64, Float64} = (0., 1000.)`: Time span for traces
-- `dt::Float64 = 1.0`: Time step
-- `bins::Int = 100`: Number of histogram bins
-- `maxtime::Float64 = 100.0`: Maximum dwell time
-
-### Output Parameters
-
-- `outfolder::String = "histograms"`: Output folder
-- `label::String = ""`: Output file label
-- `write::Bool = true`: Write histograms to file
-- `returnhist::Bool = false`: Return histogram data
-
-## Returns
-
-- `hist`: Tuple containing:
-  - ON dwell time histogram
-  - OFF dwell time histogram
-  - Bin edges
-
-## Examples
+## Key-based use
 
 ```julia
-# Generate histograms for a simple G model
-write_ONOFFhistograms(
-    G = 2,
-    R = 0,
-    rates = [0.1, 0.2],  # G1->G2, G2->G1
-    ntraces = 1000,
-    tspan = (0., 1000.),
-    bins = 100,
-    maxtime = 100.0
-)
+using StochasticGene
 
-# Generate histograms for a GR model
-write_ONOFFhistograms(
-    G = 2,
-    R = 3,
-    S = 2,
-    insertstep = 1,
-    rates = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-    ntraces = 5000,
-    tspan = (0., 2000.),
-    bins = 150,
-    maxtime = 200.0
+write_ONOFFhistograms_key(
+    "results/my-run";
+    ratetype = "median",
+    bin_size = 100 / 60,
+    maxtime = 200.0,
 )
 ```
 
-## Notes
+StochasticGene rates and times use minutes, so a 100-second imaging interval is
+`100 / 60` minutes. The call above evaluates the distribution at
+`100/60, 200/60, ...` through 200 minutes.
 
-1. **Histogram Generation**
-   - Traces are generated using Gillespie algorithm
-   - ON/OFF states are determined by gene state
-   - Histograms are normalized to total number of transitions
+To use nonuniform or precomputed time points, pass them directly:
 
-2. **Rate Order**
-   - G transitions
-   - R transitions
-   - S transitions
-   - Decay
+```julia
+write_ONOFFhistograms_key(
+    "results/my-run";
+    bins = collect(0.5:0.5:100.0),
+)
+```
+
+An explicit `bins` vector takes precedence over `bin_size` and `maxtime`.
+
+## Output columns
+
+Each `ONOFF_<key>.csv` contains:
+
+| Column | Meaning |
+|---|---|
+| `time` | Dwell time in minutes |
+| `ON` | Historical normalized ON PDF bin probability |
+| `OFF` | Historical normalized OFF PDF bin probability |
+| `ON_CDF` | Directly calculated ON cumulative probability |
+| `OFF_CDF` | Directly calculated OFF cumulative probability |
+
+The CDF is computed by the master-equation calculation and the PDF is derived
+from its finite differences. The CDF columns are therefore preferable when a
+plot or comparison requires cumulative probabilities; callers no longer need
+to reconstruct them from the normalized PDF columns.
+
+With `simulate=true`, the output additionally contains `SimON`, `SimOFF`,
+`SimON_CDF`, and `SimOFF_CDF`.
+
+## Direct rate-vector use
+
+```julia
+bins = collect((100 / 60):(100 / 60):200.0)
+
+df = write_ONOFFhistograms(
+    rates,
+    transitions,
+    G,
+    R,
+    S,
+    insertstep,
+    bins;
+    outfile = "ONOFF_model.csv",
+)
+```
+
+The direct method requires a complete model rate vector in the standard rate
+order. It returns the same `DataFrame` that it writes.
+
+## Folder compatibility method
+
+Legacy rate-file folders can still be processed with:
+
+```julia
+write_ONOFFhistograms(
+    "results/legacy-run";
+    bin_size = 100 / 60,
+    maxtime = 200.0,
+)
+```
+
+For key-based folders, prefer `write_ONOFFhistograms_key`.

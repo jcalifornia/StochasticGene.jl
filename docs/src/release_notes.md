@@ -1,5 +1,17 @@
 # Version 2.0
 
+## Version 2.0.4
+
+Version 2.0.4 exposes the ON/OFF dwell-time CDFs that were already calculated
+internally before deriving the normalized PDFs. `write_ONOFFhistograms` and
+`write_ONOFFhistograms_key` now write `ON_CDF` and `OFF_CDF` alongside the
+existing `ON` and `OFF` columns. Simulation output also includes `SimON_CDF`
+and `SimOFF_CDF`.
+
+Key-based and legacy folder generators accept `bin_size` and `maxtime` in
+minutes. Use `bin_size=100/60` to match data acquired every 100 seconds. An
+explicit `bins` vector remains supported and takes precedence.
+
 ## Version 2.0.3
 
 Version 2.0.3 brings coupled simulation into parity with the coupled transition

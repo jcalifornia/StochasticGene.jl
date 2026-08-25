@@ -621,6 +621,23 @@ const FULL_TESTS = get(ENV, "STOCHASTICGENE_FULL_TESTS", "0") == "1"
         @test isapprox(h1, h2, rtol=0.3)
 
         @test StochasticGene.test_load_model_keyword_compatibility()
+
+        bins_100s = StochasticGene._onoff_output_bins(nothing, 100 / 60, 20.0)
+        @test length(bins_100s) == 12
+        @test bins_100s[1] ≈ 100 / 60
+        @test all(diff(bins_100s) .≈ 100 / 60)
+
+        onoff = StochasticGene.write_ONOFFhistograms(
+            [0.3, 0.2, 0.4, 0.5, 1.0],
+            ([1, 2], [2, 1]), 2, 1, 0, 1, bins_100s,
+        )
+        @test names(onoff) == ["time", "ON", "OFF", "ON_CDF", "OFF_CDF"]
+        @test all(diff(onoff.ON_CDF) .>= -1e-12)
+        @test all(diff(onoff.OFF_CDF) .>= -1e-12)
+        @test all(0 .<= onoff.ON_CDF .<= 1)
+        @test all(0 .<= onoff.OFF_CDF .<= 1)
+        @test sum(onoff.ON) ≈ 1
+        @test sum(onoff.OFF) ≈ 1
     end
 
     @testset "get_rates_ad consistency" begin

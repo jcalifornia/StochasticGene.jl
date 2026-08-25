@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.4
+
+ON/OFF dwell-time output improvement:
+
+- Write the directly calculated `ON_CDF` and `OFF_CDF` alongside the existing
+  normalized PDF columns.
+- Add uniform `bin_size` and `maxtime` options, in minutes, to the key-based and
+  legacy folder generators. Use `bin_size=100/60` for 100-second frames.
+- Include `SimON_CDF` and `SimOFF_CDF` when simulation output is requested.
+
+Existing `ON` and `OFF` PDF columns and direct explicit-bin calls are preserved.
+
 ## 2.0.3
 
 Correctness and documentation patch for coupled simulation:

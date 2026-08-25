@@ -2,7 +2,7 @@
 
 A Julia package for simulating and fitting stochastic models of gene transcription to experimental data.
 
-**Current release: v2.0.3**
+**Current release: v2.0.4**
 
 ## Overview
 

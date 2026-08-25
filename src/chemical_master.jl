@@ -148,10 +148,27 @@ ontimePDF(tin::Vector, TA::AbstractMatrix, offstates, SAinit::Vector, method=Tsi
 
 offtimePDF(tin::Vector, TI::AbstractMatrix, onstates, SIinit::Vector, method=Tsit5()) = dwelltimePDF(tin, TI, onstates, SIinit, method)
 
-function offonPDF(t::Vector, r::Vector, T::AbstractMatrix, TA::AbstractMatrix, TI::AbstractMatrix, nT::Int, elementsT::Vector, onstates::Vector; steady_state_solver::Symbol=:default, method=Tsit5())
+"""
+    offonCDF(t, r, T, TA, TI, nT, elementsT, onstates; kwargs...)
+
+Return `(OFF_CDF, ON_CDF)` at the supplied dwell-time bins. Each returned
+vector includes the internally prepended left-edge value used by
+[`pdf_from_cdf`](@ref); values corresponding to `t` are therefore `[2:end]`.
+"""
+function offonCDF(t::Vector, r::Vector, T::AbstractMatrix, TA::AbstractMatrix, TI::AbstractMatrix, nT::Int, elementsT::Vector, onstates::Vector; steady_state_solver::Symbol=:default, method=Tsit5())
     pss = steady_state_vector(T; solver=steady_state_solver)
     nonzeros = nonzero_rows(TI)
-    offtimePDF(t, TI[nonzeros, nonzeros], nonzero_states(onstates, nonzeros), init_SI(r, onstates, elementsT, pss, nonzeros), method), ontimePDF(t, TA, off_states(nT, onstates), init_SA(r, onstates, elementsT, pss), method)
+    dwelltimeCDF(t, TI[nonzeros, nonzeros], nonzero_states(onstates, nonzeros), init_SI(r, onstates, elementsT, pss, nonzeros), method),
+        dwelltimeCDF(t, TA, off_states(nT, onstates), init_SA(r, onstates, elementsT, pss), method)
+end
+
+function offonPDF(t::Vector, r::Vector, T::AbstractMatrix, TA::AbstractMatrix, TI::AbstractMatrix, nT::Int, elementsT::Vector, onstates::Vector; steady_state_solver::Symbol=:default, method=Tsit5())
+    off_cdf, on_cdf = offonCDF(
+        t, r, T, TA, TI, nT, elementsT, onstates;
+        steady_state_solver=steady_state_solver,
+        method=method,
+    )
+    pdf_from_cdf(off_cdf), pdf_from_cdf(on_cdf)
 end
 
 """

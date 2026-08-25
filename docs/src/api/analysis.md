@@ -122,14 +122,21 @@ and model metadata.
 For key-based runs:
 
 ```julia
-write_ONOFFhistograms_key("results/my-run")
+write_ONOFFhistograms_key(
+    "results/my-run";
+    bin_size = 100 / 60, # 100-second frames; package time unit is minutes
+    maxtime = 200.0,
+)
 write_joint_residence_prob_onoff_key("results/my-run")
 write_residency_G_folder("results/my-run")
 ```
 
 `write_ONOFFhistograms_key` is the key-aware replacement for older
 `write_ONOFFhistograms` calls when the folder is organized around
-`info_<key>.jld2`.
+`info_<key>.jld2`. Its CSV contains the historical normalized PDF columns
+`ON` and `OFF` plus the directly calculated `ON_CDF` and `OFF_CDF`. Supply
+either an explicit `bins` vector or uniform `bin_size` and `maxtime`; all times
+are in minutes.
 
 `write_joint_residence_prob_onoff_key` computes ON/OFF joint residence
 probabilities from key metadata and matching rate files.
