@@ -246,12 +246,15 @@ Construct coupling structure from coupling field and model parameters.
 # State 3 → transition 1 coupling (unit 1 → unit 2)
 make_coupling("31", 3, 4)  # returns ((1, 2), [(1, 3, 2, 1)])
 
-# All R states → transition 5
+# Rsum: each R state contributes to transition 5
 make_coupling("R5", 3, 4)  # returns ((1, 2), [(1, 4, 2, 5), (1, 5, 2, 5), ...])
 ```
 
 # Notes
-- If coupling_field starts with "R": all RNA states (G+1 to G+R) → target transition
+- If `coupling_field` starts with `"R"`, it creates `Rsum`: one connection
+  from every RNA state (`G+1:G+R`) to the target transition.
+- `Rany` is a distinct representation: one connection whose source-state
+  sentinel is `G+R+1`. CSV readers accept explicit `Ranyk` and `Rsumk` tokens.
 - Otherwise: single source state → target transition (target from last character)
 - Empty connections is valid when building manually: use `(unit_model, ConnectionSpec[])`.
 """

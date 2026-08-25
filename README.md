@@ -1,9 +1,9 @@
 # StochasticGene.jl
 
-Current release: **2.0.2**. See the [2.0 release notes](docs/src/release_notes.md)
+Current release: **2.0.3**. See the [2.0 release notes](docs/src/release_notes.md)
 for highlights and migration guidance.
 
-**Version 2.0.2**
+**Version 2.0.3**
 
 [![Documents](https://img.shields.io/badge/Documents-blue.svg)](https://nih-niddk-mbs.github.io/StochasticGene.jl/dev/)
 
@@ -177,6 +177,14 @@ Then run `swarm -f fit.swarm` on Biowulf, `sbatch fit_slurm.sh` on Slurm,
 `./fit_parallel.sh` with GNU Parallel, or `bash fit.swarm` for a sequential local run.
 
 **Coupled models:** fit each unit separately, merge rates with **`create_combined_file`** / **`create_combined_file_mult`**, then run the coupled fit warm-started from that table (detailed steps in the manual).
+
+Coupling uses `(unit_model, connections[, sign_modes])`, where a connection is
+`(source_unit, source_state, target_unit, target_transition)`. `Rany` applies
+one effect when any reporter position is occupied; `Rsum` adds one effect per
+occupied reporter position. The historical `make_coupling("R5", G, R)` form is
+`Rsum`. Fitting, likelihood evaluation, and simulation share these semantics;
+see [Units and models](docs/src/concepts/units_and_models.md) and the
+[simulator API](docs/src/api/simulator.md).
 
 ---
 

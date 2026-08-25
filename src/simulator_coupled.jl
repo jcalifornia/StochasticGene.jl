@@ -154,7 +154,16 @@ Simulate any GRSM model. Returns steady state mRNA histogram. If bins not a null
 
 #Named arguments
 - `bins::Vector=Float64[]`: vector of time bin vectors for each set of ON and OFF histograms or vector of vectors of time bins (one time bin vector for each onstate)
-- `coupling=tuple()`: if nonempty, `(unit_model, connections)` where `unit_model` is a tuple of model indices per unit (e.g. (1, 2)) and `connections` is a vector of `(β, s, α, t)` (source unit, source state, target unit, target transition). Use `make_coupling` / `make_coupling_reciprocal` in io.jl to build from a coupling field string. Empty `connections` is valid (no interaction terms).
+- `coupling=tuple()`: if nonempty, `(unit_model, connections[, sign_modes])`.
+  `unit_model` maps simulation units to model definitions; each connection is
+  `(β, s, α, t)` (source unit, source state, target unit, target transition).
+  Active connections to the same target transition contribute additively.
+  `make_coupling("R5", G, R)` expands to one connection per R position
+  (`Rsum`). To represent `Rany`, use one sentinel source state
+  `G[β] + R[β] + 1`. The input rate vector contains one coupling strength per
+  connection, after all model-rate and noise blocks. Repeat gamma across the
+  expanded connections when simulating a tied `Rsum` fit. Empty connections
+  are valid.
 - `nalleles`: Number of alleles
 - `nhist::Int`: Size of mRNA histogram
 - `onstates::Vector`: a vector of vector of ON states (use empty set for any R step is ON), ON and OFF time distributions are computed for each ON state set. **Dwell-time histograms do not distinguish alleles**: they aggregate over alleles (uncoupled: both alleles contribute to the same histograms; coupled: sojourn is evaluated on allele 1 only).
@@ -185,7 +194,11 @@ function simulator(rin, transitions, G, R, S, insertstep; warmupsteps::Integer=0
 
     r = copy(rin)
     if !isempty(coupling)
+        unit_model = coupling[1]
         coupling, nalleles, noiseparams, r = prepare_coupled(r, coupling, transitions, G, R, S, insertstep, nalleles, noiseparams)
+        transitions, G, R, S, insertstep = _expand_model_specs_for_units(
+            unit_model, transitions, G, R, S, insertstep,
+        )
         nhist = 0
     end
 
@@ -383,7 +396,11 @@ selects an automatic physical burn-in from the slowest positive model rate.
 function simulator_ss(rin, transitions, G, R, S, insertstep; warmupsteps::Integer=0, warmuptime=0.0, equilibration_timescales::Real=10.0, coupling=tuple(), nalleles=1, nhist=20, onstates=Int[], bins=Float64[], traceinterval::Float64=0.0, probfn=prob_Gaussian, noiseparams=4, totalsteps::Int=100000000, totaltime::Float64=0.0, tol::Float64=1e-6, reporterfn=sum, splicetype="", a_grid=nothing, verbose::Bool=false, ejectnumber=1)
     r = copy(rin)
     if !isempty(coupling)
+        unit_model = coupling[1]
         coupling, nalleles, noiseparams, r = prepare_coupled(r, coupling, transitions, G, R, S, insertstep, nalleles, noiseparams)
+        transitions, G, R, S, insertstep = _expand_model_specs_for_units(
+            unit_model, transitions, G, R, S, insertstep,
+        )
         nhist = 0
     end
 
@@ -592,29 +609,25 @@ end
 Find coupled targets for each unit in a coupled model.
 
 # Arguments
-- `coupling::Tuple`: Public API is `(unit_model, connections)`. Internally converted to 6-tuple (unit_model, sources, connections, target_transition, ncoupling, targets) for simulation.
+- `coupling::Tuple`: Public API is `(unit_model, connections)`. Internally converted to a 6-tuple `(unit_model, sources, connections, target_transitions, ncoupling, targets)` for simulation.
 
 # Returns
 - `Vector{Vector{Int}}`: Vector where targets[i] contains indices of units that are influenced by unit i
 """
 function targets(coupling)
-    targets_out = Vector{Int}[]
-    models = coupling[1]
-    sources = coupling[2]
-    for m in models
-        t = Int[]
-        for i in eachindex(sources)
-            if m ∈ sources[i]
-                push!(t, i)
-            end
-        end
-        push!(targets_out, t)
+    unit_model = coupling[1]
+    connections = coupling[2]
+    targets_out = [Int[] for _ in eachindex(unit_model)]
+    for (source, _, target, _) in connections
+        target in targets_out[source] || push!(targets_out[source], target)
     end
     targets_out
 end
 
-# Build internal 6-tuple (unit_model, sources, connections, target_transition, ncoupling, targets)
-# from (unit_model, connections). Source state is not stored; derive via source_states_for_unit(connections, unit).
+# Build internal 6-tuple
+# (unit_model, sources, connections, target_transitions, ncoupling, targets)
+# from (unit_model, connections). Target transitions remain separate because fit
+# permits distinct transitions of the same unit to be coupled independently.
 function _coupling_from_connections(unit_model, connections)
     n_units = length(unit_model)
     sources_vec = [Int[] for _ in 1:n_units]
@@ -624,10 +637,10 @@ function _coupling_from_connections(unit_model, connections)
         push!(target_transition_vec[α], t)
     end
     sources = ntuple(i -> tuple(sources_vec[i]...), n_units)
-    target_transition = ntuple(i -> isempty(target_transition_vec[i]) ? 0 : target_transition_vec[i][1], n_units)
+    target_transitions = ntuple(i -> unique(target_transition_vec[i]), n_units)
     ncoupling = length(connections)
-    targets_out = targets((unit_model, sources))
-    (unit_model, sources, connections, target_transition, ncoupling, targets_out)
+    targets_out = targets((unit_model, connections))
+    (unit_model, sources, connections, target_transitions, ncoupling, targets_out)
 end
 
 """
@@ -647,18 +660,47 @@ Prepare parameters for coupled model simulation. Coupling is (unit_model, connec
 """
 function prepare_coupled(r, coupling, transitions, G, R, S, insertstep, nalleles, noiseparams)
     unit_model, connections = coupling[1], coupling[2]
+    isempty(unit_model) && throw(ArgumentError("coupling unit_model cannot be empty"))
+    nmodels = length(R)
+    all(model -> 1 <= model <= nmodels, unit_model) || throw(ArgumentError(
+        "coupling unit_model entries must index the $nmodels model definitions; got $unit_model",
+    ))
+    coupling_ranges(coupling) # Validate optional per-connection sign metadata.
     ncoupling = length(connections)
-    if length(r) >= ncoupling && any(r[end-ncoupling+1:end] .< -1.0)
-        throw(ArgumentError("all coupling strengths must be > -1.0"))
-    end
     if isnothing(noiseparams)
         noiseparams = [R[i] > 0 ? 4 : 0 for i in eachindex(R)]
     elseif noiseparams isa Number
         # Only create noise parameters for observable units (R > 0); hidden units (R=0) have 0 noise params
         noiseparams = [R[i] > 0 ? Int(noiseparams) : 0 for i in eachindex(R)]
     end
+    length(noiseparams) == nmodels || throw(ArgumentError(
+        "noiseparams must have one entry per model definition ($nmodels); got $(length(noiseparams))",
+    ))
+    nbase = sum(num_rates(transitions[i], R[i], S[i], insertstep[i]) + noiseparams[i]
+                for i in eachindex(R))
+    length(r) == nbase + ncoupling || throw(ArgumentError(
+        "coupled simulator expected $nbase base/noise rates plus $ncoupling coupling strengths, " *
+        "but received $(length(r)) values",
+    ))
+    coupling_strength = ncoupling == 0 ? eltype(r)[] : r[nbase+1:end]
+    for (i, (gamma, mode)) in enumerate(zip(coupling_strength, coupling_ranges(coupling)))
+        gamma > -1 || throw(ArgumentError("coupling strength $i must be > -1; got $gamma"))
+        mode === :activate && gamma <= 0 && throw(ArgumentError(
+            "coupling strength $i is constrained to :activate but is $gamma",
+        ))
+        mode === :inhibit && !(gamma < 0) && throw(ArgumentError(
+            "coupling strength $i is constrained to :inhibit but is $gamma",
+        ))
+    end
     coupling_6 = _coupling_from_connections(unit_model, connections)
-    return coupling_6, nalleles, noiseparams, prepare_rates_sim(r, coupling_6, transitions, R, S, insertstep, noiseparams)
+    unit_noiseparams = [noiseparams[model] for model in unit_model]
+    return coupling_6, nalleles, unit_noiseparams,
+        prepare_rates_sim(r, coupling_6, transitions, R, S, insertstep, noiseparams)
+end
+
+function _expand_model_specs_for_units(unit_model, transitions, G, R, S, insertstep)
+    map_spec(spec) = ntuple(unit -> spec[unit_model[unit]], length(unit_model))
+    return map_spec(transitions), map_spec(G), map_spec(R), map_spec(S), map_spec(insertstep)
 end
 
 
@@ -678,15 +720,15 @@ Prepare rate vectors for coupled model simulation by separating rates for each g
 - `n_noise::Vector{Int}`: Number of noise parameters for each gene
 
 # Returns
-- `Vector{Vector{Float64}}`: Vector of rate vectors, one for each gene, plus coupling parameters
+- `Vector{Vector{Float64}}`: Vector of rate vectors, one for each simulated unit, followed by the coupling-strength vector. Reused model definitions are expanded to their units here.
 """
 function prepare_rates_sim(rates, coupling, transitions, R, S, insertstep, n_noise)
-    r = Vector[]
+    model_rates = Vector[]
     couplingStrength = Float64[]
     j = 1
     for i in eachindex(R)
         n = num_rates(transitions[i], R[i], S[i], insertstep[i]) + n_noise[i]
-        push!(r, rates[j:j+n-1])
+        push!(model_rates, rates[j:j+n-1])
         j += n
     end
     # Coupling parameters always follow the public connection-list order. There
@@ -696,20 +738,25 @@ function prepare_rates_sim(rates, coupling, transitions, R, S, insertstep, n_noi
         push!(couplingStrength, rates[j])
         j += 1
     end
+    r = Vector[]
+    for model in coupling[1]
+        push!(r, copy(model_rates[model]))
+    end
     push!(r, couplingStrength)
     r
 end
 
 function _coupling_factor_for_target(state, target::Int, coupling_strength,
-    connections, unit_model, G, R, S; override_unit::Int=0, override_state=nothing)
+    connections, G, R, S; target_transition::Union{Nothing,Int}=nothing,
+    override_unit::Int=0, override_state=nothing)
     factor = 1.0
-    for (k, (source, source_state, connection_target, _)) in enumerate(connections)
+    for (k, (source, source_state, connection_target, connection_transition)) in enumerate(connections)
         connection_target == target || continue
+        isnothing(target_transition) || connection_transition == target_transition || continue
         source_vector = source == override_unit ? override_state : state[source, 1]
-        model_source = unit_model[source]
         occupied = _source_occupied(
             findall(!iszero, vec(source_vector)), [source_state],
-            G[model_source], R[model_source], S[model_source] > 0 ? 3 : 2,
+            G[source], R[source], S[source] > 0 ? 3 : 2,
         )
         occupied && (factor += coupling_strength[k])
     end
@@ -851,7 +898,7 @@ function simulate_trace_vector(rin, transitions, G::Tuple, R, S, insertstep, cou
         if !isempty(hierarchical)
             r[hierarchical[1]] = hierarchical[2][i]
         end
-        t = simulator(r, transitions, G, R, S, insertstep, coupling=coupling, onstates=onstates, traceinterval=interval, totaltime=totaltime, totalsteps=totalsteps, nhist=0, probfn=probfn, reporterfn=reporterfn, warmupsteps=warmupsteps, warmuptime=warmuptime, equilibration_timescales=equilibration_timescales, verbose=verbose, trace_specs=trace_specs, noiseparams=noiseparams, splicetype=splicetype, observed_units=observed_units)[1]
+        t = simulator(r, transitions, G, R, S, insertstep, coupling=coupling, onstates=onstates, traceinterval=interval, totaltime=totaltime, totalsteps=totalsteps, nhist=0, probfn=probfn, reporterfn=reporterfn, a_grid=a_grid, warmupsteps=warmupsteps, warmuptime=warmuptime, equilibration_timescales=equilibration_timescales, verbose=verbose, trace_specs=trace_specs, noiseparams=noiseparams, splicetype=splicetype, observed_units=observed_units)[1]
         if col isa Vector
             # When col is a vector, extract multiple columns and combine them
             tr = Vector[]
@@ -1101,15 +1148,26 @@ function state_index(state::Array, G::Int, R, S, allele=1)
 end
 
 function state_index(state, G::Tuple, R::Tuple, S::Tuple, allele=1)
-    si = Vector{Int}(undef, 2)
+    si = Vector{Int}(undef, length(G))
     for i in eachindex(G)
         si[i] = state_index(state[i, 1], G[i], R[i], S[i], allele)
     end
-    (si[1] - 1) * T_dimension(G[2], R[2], S[2]) + si[2]
+    index = si[1]
+    for i in 2:length(si)
+        index = (index - 1) * T_dimension(G[i], R[i], S[i]) + si[i]
+    end
+    index
 end
 
 function coupled_state_index(jointstate::Vector, G, R, S)
-    (jointstate[1] - 1) * T_dimension(G[2], R[2], S[2]) + jointstate[2]
+    length(jointstate) == length(G) || throw(ArgumentError(
+        "jointstate has $(length(jointstate)) units but model geometry has $(length(G))",
+    ))
+    index = jointstate[1]
+    for i in 2:length(jointstate)
+        index = (index - 1) * T_dimension(G[i], R[i], S[i]) + jointstate[i]
+    end
+    index
 end
 
 """
@@ -1387,11 +1445,12 @@ function update_coupling!(tau, state, index, t, r, enabled, initialstate, coupli
     unit = index[1]
     reaction = index[2]
     connections = coupling[3]
-    ttrans = coupling[4]
+    target_transitions = coupling[4]
     targets = coupling[6][unit]
     coupling_strength = r[end]  # Connection-list order, one value per connection.
 
-    verbose && println("unit: ", unit, ", targets: ", targets, ", ttrans: ", ttrans)
+    verbose && println("unit: ", unit, ", targets: ", targets,
+        ", target_transitions: ", target_transitions)
     verbose && println("tau1: ", tau)
 
     # unit as source: for each target, rescale target's coupling-transition tau when source occupancy changes.
@@ -1399,33 +1458,44 @@ function update_coupling!(tau, state, index, t, r, enabled, initialstate, coupli
     # If source unit β controls α1 from state s1 and α2 from state s2, using s=[s1,s2] for both targets
     # incorrectly activates both couplings whenever either source state is occupied.
     for target in targets
-        if isfinite(tau[target][ttrans[target], 1])
+        for target_transition in target_transitions[target]
+            # For self-coupling, a target transition that just fired or was
+            # re-enabled has a fresh base-rate draw. The target block below
+            # applies its new factor; rescaling it here as residual time would
+            # apply the coupling twice.
+            target == unit &&
+                (reaction == target_transition || target_transition ∈ enabled) && continue
+            isfinite(tau[target][target_transition, 1]) || continue
             old_factor = _coupling_factor_for_target(
-                state, target, coupling_strength, connections, coupling[1], G, R, S;
+                state, target, coupling_strength, connections, G, R, S;
+                target_transition=target_transition,
                 override_unit=unit, override_state=initialstate,
             )
             new_factor = _coupling_factor_for_target(
-                state, target, coupling_strength, connections, coupling[1], G, R, S,
+                state, target, coupling_strength, connections, G, R, S,
+                target_transition=target_transition,
             )
             verbose && println("src=", unit, " -> tgt=", target,
+                " transition=", target_transition,
                 " factor ", old_factor, " -> ", new_factor)
-            tau[target][ttrans[target], 1] = old_factor / new_factor *
-                (tau[target][ttrans[target], 1] - t) + t
+            tau[target][target_transition, 1] = old_factor / new_factor *
+                (tau[target][target_transition, 1] - t) + t
         end
     end
 
-    # unit as target: rescale ttrans[unit] whenever its tau has been freshly drawn from the base rate:
-    #  1. reaction == ttrans[unit]: the coupling target just fired and was redrawn.
-    #  2. ttrans[unit] ∈ enabled: the coupling target was just re-enabled (e.g. unit re-entered G=2
-    #     from G=1 or G=3), so transitionG!/deactivateG! drew a fresh base-rate tau for it.
-    if reaction == ttrans[unit] || ttrans[unit] ∈ enabled
-        factor = _coupling_factor_for_target(
-            state, unit, coupling_strength, connections, coupling[1], G, R, S,
-        )
-        verbose && println("target=$unit fresh rate factor=$factor tau=",
-            tau[unit][ttrans[unit], 1])
-        tau[unit][ttrans[unit], 1] = 1 / factor *
-            (tau[unit][ttrans[unit], 1] - t) + t
+    # Unit as target: rescale every coupled transition whose base-rate tau was
+    # freshly drawn, either because it fired or because it was re-enabled.
+    for target_transition in target_transitions[unit]
+        if reaction == target_transition || target_transition ∈ enabled
+            factor = _coupling_factor_for_target(
+                state, unit, coupling_strength, connections, G, R, S;
+                target_transition=target_transition,
+            )
+            verbose && println("target=$unit fresh rate factor=$factor tau=",
+                tau[unit][target_transition, 1])
+            tau[unit][target_transition, 1] = 1 / factor *
+                (tau[unit][target_transition, 1] - t) + t
+        end
     end
     verbose && println("tau2: ", tau)
 end

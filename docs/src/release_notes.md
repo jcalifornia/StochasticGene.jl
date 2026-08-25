@@ -1,5 +1,30 @@
 # Version 2.0
 
+## Version 2.0.3
+
+Version 2.0.3 brings coupled simulation into parity with the coupled transition
+matrix used by fitting and likelihood evaluation. The simulator now handles
+connections to different target transitions independently, reciprocal
+coupling, hidden three-unit models, and repeated entries in `unit_model`.
+Stationary-state indexing works for any number of units, and coupled trace
+simulation preserves `a_grid`.
+
+The release also makes the two reporter-state conventions explicit:
+
+- `Rany` uses one sentinel source state and multiplies the target transition by
+  `1 + gamma` whenever at least one reporter position is occupied.
+- `Rsum` uses one connection per reporter position. If `n` positions are
+  occupied, a tied strength gives the factor `1 + n*gamma`.
+
+The historical shorthand `make_coupling("R5", G, R)` expands to `Rsum`, not
+`Rany`. In direct simulator calls, the rate vector contains one strength per
+expanded connection; repeat a tied fitted gamma for each R-position connection.
+
+Malformed unit-model maps, rate/noise layouts, and coupling sign metadata now
+raise `ArgumentError` rather than being silently misinterpreted. These changes
+can alter coupled simulated trajectories but do not change fitted rate-file
+formats.
+
 ## Version 2.0.2
 
 Version 2.0.2 corrects the parameter domain for `Rsum` coupled models. An

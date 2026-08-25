@@ -82,21 +82,23 @@ transitions = (
     ([1, 2], [2, 1])   # Gene 2 transitions
 )
 
-# Define transcription rates for each state
-transcription_rates = (
-    [0.0, 1.0],  # Gene 1 rates
-    [0.0, 1.0]   # Gene 2 rates
-)
+# Unit 1 in state 2 affects transition 1 of unit 2.
+coupling = ((1, 2), [(1, 2, 2, 1)])
 
-# Define coupling structure
-coupling = (
-    (1, 2),           # Coupled genes
-    (Int[], [1]),     # Coupling directions
-    [2, 0],           # Coupling strengths
-    [0, 2],           # Coupling effects
-    1                 # Coupling type
-)
+# Optional sign metadata constrains gamma during fitting.
+inhibitory_coupling = ((1, 2), [(1, 2, 2, 1)], :inhibit)
 ```
+
+Connections use `(source_unit, source_state, target_unit, target_transition)`.
+Use `make_coupling` for one-way coupling, `make_coupling_reciprocal` for two-way
+coupling, or `make_coupling_hidden_latent` for the supported hidden three-unit
+layout.
+
+Reporter coupling has two forms. `Rany` contributes once when any reporter
+position is occupied. `Rsum` contributes once for every occupied position;
+`make_coupling("R5", G, R)` is the historical `Rsum` shorthand. See
+[Units and models](../concepts/units_and_models.md) for the full representation,
+rate ordering, and simulator conventions.
 
 ## Fitting the Model
 
@@ -108,7 +110,6 @@ fits, stats, measures, data, model, options = fit(
     G = G,
     R = R,
     transitions = transitions,
-    transcription_rates = transcription_rates,
     datatype = "coupled",
     datapath = "data/",
     genes = ("MYC", "FOS"),

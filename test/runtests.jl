@@ -778,6 +778,73 @@ const FULL_TESTS = get(ENV, "STOCHASTICGENE_FULL_TESTS", "0") == "1"
         )
         residence ./= sum(residence)
         @test maximum(abs.(stationary .- residence)) < 0.015
+
+        function simulator_stationary_error(rates, coupling, transitions, G, R, S, insertstep;
+                                            seed=8, totalsteps=100_000)
+            components = StochasticGene.TCoupledFullComponents(
+                coupling, transitions, G, R, S, insertstep, "",
+            )
+            unit_rates, coupling_strength, _ = StochasticGene.prepare_rates_coupled(
+                rates, coupling, transitions, R, S, insertstep, zeros(Int, length(R)),
+            )
+            coupling_rates = [
+                coupling_strength[k] * unit_rates[components.targets[k][1]][components.targets[k][2]]
+                for k in eachindex(components.targets)
+            ]
+            _, expected = StochasticGene.make_ap(unit_rates, coupling_rates, 1.0, components)
+            Random.seed!(seed)
+            observed = StochasticGene.simulator_ss(
+                rates, transitions, G, R, S, insertstep;
+                coupling=coupling,
+                noiseparams=zeros(Int, length(R)),
+                totalsteps=totalsteps,
+                warmuptime=100.0,
+            )
+            observed ./= sum(observed)
+            maximum(abs.(expected .- observed))
+        end
+
+        base_rates = [
+            0.3, 0.2, 0.4, 0.5, 1.0,
+            0.25, 0.35, 0.45, 0.55, 1.0,
+        ]
+        @test simulator_stationary_error(
+            [base_rates; 0.2; 0.8],
+            ((1, 2), [(1, 1, 2, 1), (1, 2, 2, 2)]),
+            transitions, G, R, S, insertstep,
+        ) < 0.02
+
+        @test simulator_stationary_error(
+            [base_rates; 0.15; 0.1; 0.2],
+            ((1, 2), [(2, 3, 1, 1), (1, 3, 2, 1), (1, 4, 2, 1)]),
+            transitions, G, R, S, insertstep;
+            seed=9,
+        ) < 0.02
+
+        transitions_hidden = (
+            ([1, 2], [2, 1]),
+            ([1, 2], [2, 1]),
+            ([1, 2], [2, 1], [2, 3], [3, 2], [1, 3], [3, 1]),
+        )
+        @test simulator_stationary_error(
+            [
+                0.3, 0.2, 0.4, 1.0,
+                0.25, 0.35, 0.45, 1.0,
+                0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.3, 1.0,
+                0.4, -0.3,
+            ],
+            make_coupling_hidden_latent(1, 2),
+            transitions_hidden, (2, 2, 3), (0, 0, 0), (0, 0, 0), (1, 1, 1);
+            seed=10,
+        ) < 0.02
+
+        @test simulator_stationary_error(
+            [0.3, 0.2, 0.4, 0.5, 1.0, 0.5],
+            ((1, 1), [(1, 1, 2, 1)]),
+            (([1, 2], [2, 1]),), (2,), (1,), (0,), (1,);
+            seed=11,
+        ) < 0.02
+
     end
 
     @testset "repeated finite-experiment ON correlations" begin

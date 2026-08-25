@@ -92,26 +92,50 @@ histogram, traces = simulator(
 ### Coupled Model
 
 ```julia
-# Two coupled transcriptional units
-rates1 = [0.1, 0.2, 0.3]
-rates2 = [0.15, 0.25, 0.35]
-transitions1 = ([1,2], [2,1])
-transitions2 = ([1,2], [2,1])
+# Two model definitions and two simulation units.
+transitions = (([1, 2], [2, 1]), ([1, 2], [2, 1]))
+G, R, S, insertstep = (2, 2), (1, 1), (0, 0), (1, 1)
 
-# Coupling: units share some transition rates
-coupling = (2, 2, [1,2], [3,4], 2)  # Coupling specification
+# Unit 1 in state 1 modifies transition 1 of unit 2.
+coupling = ((1, 2), [(1, 1, 2, 1)])
 
-histogram = simulator(
-    [rates1; rates2], 
-    (transitions1, transitions2),
-    (2, 2),        # G states for each unit
-    (1, 1),        # R steps for each unit
-    (0, 0),        # S sites for each unit
-    (1, 1),        # Insert steps
-    coupling = coupling,
-    nalleles = 2
+# Complete rates for model 1, then model 2, then one gamma per connection.
+rates = [
+    0.30, 0.20, 0.40, 0.50, 1.0,
+    0.25, 0.35, 0.45, 0.55, 1.0,
+    0.20,
+]
+
+residence = simulator_ss(
+    rates, transitions, G, R, S, insertstep;
+    coupling=coupling,
+    noiseparams=[0, 0],
+    warmuptime=100.0,
+    totalsteps=200_000,
 )
 ```
+
+The canonical coupling form is `(unit_model, connections[, sign_modes])`.
+Each connection `(beta, s, alpha, t)` means that source unit `beta` in state
+`s` affects transition `t` of target unit `alpha`. The first tuple maps units
+to model definitions; repeated mappings such as `(1, 1)` are supported.
+
+For reporter-state coupling:
+
+```julia
+# Rsum: every R position is a separate connection.
+rsum = make_coupling("R5", (3, 3), (3, 3))
+
+# Rany: one sentinel source state, active if any R position is occupied.
+rany = ((1, 2), [(1, G[1] + R[1] + 1, 2, 5)])
+```
+
+With `Rsum`, `n` occupied positions and a tied strength produce the factor
+`1 + n*gamma`. With `Rany`, any nonzero occupancy produces `1 + gamma` once.
+Direct simulator vectors contain one gamma per connection, so repeat a tied
+`Rsum` gamma across all expanded R-position connections. A tied `Rsum` over
+`m` simultaneously occupiable positions requires `gamma > -1/m`; `Rany`
+requires `gamma > -1`.
 
 ### Hierarchical Model
 
@@ -167,6 +191,17 @@ The rate vector `rin` must follow this specific ordering:
 3. **S transitions**: Splicing rates
 4. **Decay rates**: mRNA decay rates
 5. **Noise parameters**: Observation noise parameters
+
+For coupled models, concatenate each **model definition's complete block** in
+model order. A block contains that model's kinetic rates followed by its noise
+parameters. Append one coupling strength per connection. This is model order,
+not unit order: if `unit_model == (1, 1)`, model 1's block appears once and is
+reused by both units.
+
+The simulator validates the exact number of model, noise, and coupling values.
+It also validates the unit-model map and optional coupling sign modes, so a
+malformed coupled vector fails before simulation rather than shifting rate
+indices silently.
 
 ### Example Rate Ordering
 

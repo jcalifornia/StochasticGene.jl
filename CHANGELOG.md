@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.0.3
+
+Correctness and documentation patch for coupled simulation:
+
+- Make coupled simulation use the same connection semantics as fitting for
+  multiple target transitions, reciprocal coupling, hidden three-unit models,
+  and repeated entries in the unit-model map.
+- Support both RNA reporter coupling definitions: `Rany` applies one coupling
+  factor when any reporter position is occupied, whereas `Rsum` adds one
+  contribution for every occupied reporter position.
+- Generalize stationary-state indexing beyond two units and preserve coupled
+  `a_grid` settings in trace simulation.
+- Validate coupled model maps, rate/noise vector lengths, and coupling sign
+  metadata instead of silently interpreting malformed inputs.
+- Replace obsolete coupled-simulator examples and document the canonical
+  `(unit_model, connections[, sign_modes])` representation and rate layout.
+
+These changes can alter simulated trajectories from coupled models that use
+multiple connections, `Rany`/`Rsum`, reciprocal coupling, hidden units, or a
+reused model definition. Fit output formats are unchanged.
+
 ## 2.0.2
 
 Correctness patch for inhibitory and free `Rsum` coupled models:

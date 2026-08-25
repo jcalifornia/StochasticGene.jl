@@ -36,6 +36,44 @@ The flattened rate vector is in **model order**, followed by coupling constants:
 
 So rate offsets are **per model**, not per unit. When assigning element rate indices for unit `i` (which uses model `unit_model[i]`), the base index is the offset for that **model**. The component struct (e.g. `TCoupledFullComponents`) stores only its size and the elements; each element’s rate index already points into this flat layout. Code that builds the matrix (e.g. `make_mat_T`) takes the component and the flat rate vector and constructs the matrix.
 
+## Connections and coupling factors
+
+The canonical public representation is:
+
+```julia
+coupling = (unit_model, connections)                 # unconstrained/free
+coupling = (unit_model, connections, sign_modes)     # constrained signs
+```
+
+Each connection is `(beta, s, alpha, t)`: source unit `beta` in state `s`
+modifies transition `t` of target unit `alpha`. Active connections affecting
+the same transition are additive, so its uncoupled rate is multiplied by
+`1 + sum(gamma[k] for k in active_connections)`.
+
+`sign_modes` is `:free`, `:activate`, or `:inhibit`, either once for every
+connection or as one entry per connection. Multiple target transitions and
+reciprocal connections remain distinct and are evaluated independently.
+
+### `Rany` and `Rsum`
+
+Reporter-state coupling has two intentionally different meanings:
+
+- **`Rany`**: one sentinel connection with source state `G[beta] + R[beta] + 1`.
+  It contributes once when any reporter position in the source unit is occupied.
+- **`Rsum`**: one connection for every source reporter position
+  `G[beta] + 1:G[beta] + R[beta]`. With a tied gamma and `n` occupied positions,
+  the multiplier is `1 + n*gamma`.
+
+For a tied `Rsum` over `m` simultaneously occupiable positions, physical rates
+require `gamma > -1/m`. `Rany` retains the ordinary bound `gamma > -1`.
+
+The historical `Rk` shorthand, including `make_coupling("R5", G, R)`, means
+`Rsumk`. CSV workflows can use explicit `Ranyk` and `Rsumk` tokens.
+
+For direct simulator calls, append one coupling strength per connection. Thus,
+to simulate a tied `Rsum` fit, repeat its fitted gamma once per expanded
+R-position connection.
+
 ## What needs what
 
 - **Functions that build matrix components** (e.g. from `coupling`, model specs, rates, noiseparams) need both unit and model information: loop over units, use `unit_model[unit]` to get the model, then use that model’s specs and the model’s rate offset for indices.
